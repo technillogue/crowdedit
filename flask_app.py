@@ -27,6 +27,15 @@ votes = Table("votes", metadata,
     Column("approximate_user_identifier", String(128))
 )
 
+comments = Table("comments", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("snippet_id", Integer, nullable=False, index=True),
+    Column("votername", String(128), index=True),
+    Column("created_at", Date, default=datetime.datetime.now),
+    Column("text", Text, nullable=False, default="")
+)
+
+
 SQLALCHEMY_DATABASE_URI = "mysql+mysqlconnector://{username}:{password}@{hostname}/{databasename}".format(
     username="enbug",
     password="rqnyfdztwutldbkwvhwk",
@@ -77,6 +86,10 @@ def index():
     sys.stderr.write("hi {} {}".format(vote, snippet_id))
     ins = votes.insert().values(snippet_id=snippet_id, positive=vote, votername = session['name'])
     conn.execute(ins)
+    comment = request.form["comment"]
+    if comment:
+        ins = comments.insert().values(snippet_id=snippet_id, votername=session['name'], text=comment)
+        conn.execute(ins)
     conn.close()
     return redirect(url_for('index'))
 
@@ -86,9 +99,23 @@ def addsnippet():
     if request.method == "GET":
         return render_template("addsnippet.html")
     #ins = snippets.insert().values(text = request.args.get("text"))
-    ins = snippets.insert().values(text = request.form["text"])
     conn = engine.connect()
-    conn.execute(ins)
+    for section in request.form["text"].split("%["):
+        title, section = section.split("\n", 1)
+        sys.stderr.write(title)
+        for snippet in section.split("%split%"):
+            snippet = snippet.strip() + "\n[day " + title + "]"
+            ins = snippets.insert().values(text = snippet)
+            conn.execute(ins)
     conn.close()
     return redirect(url_for('index'))
 
+def splitstuff():
+    for section in open("shitpostsfinal.txt").read().split("%["):
+        if section:
+            title, section = section.split("\n", 1)
+            sys.stderr.write(title)
+            for snippet in section.split("%split%"):
+                snippet = snippet.strip() + "\n[day " + title + "]"
+                ins = snippets.insert().values(text = snippet)
+                conn.execute(ins)
