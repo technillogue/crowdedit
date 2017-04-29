@@ -1,5 +1,12 @@
 <html>
     <body>
+<div class="voterstats"><h1>statsss</h1>
+<ul>
+{% for stat in voterstats %}
+<li>{{stat}}</li>
+{% endfor %}
+</ul>
+</div>
 <div class="votes"><h1>votes</h1>
             {% for vote in votes %}
                 <div class="row">
