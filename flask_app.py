@@ -5,6 +5,7 @@ import sqlalchemy.sql
 import sqlalchemy
 #from flask_sqlalchemy import SQLAlchemy
 import datetime, sys
+from collections import Counter
 from random import choice
 
 app = Flask(__name__)
@@ -43,7 +44,7 @@ SQLALCHEMY_DATABASE_URI = "mysql+mysqlconnector://{username}:{password}@{hostnam
     databasename="enbug$project",
 )
 #app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
-#app.config["SQLALCHEMY_POOL_RECYCLE"] = 299
+#app.config["SQLALCHEMY_POOL_RECYCLE"] = 100
 
 engine = create_engine(SQLALCHEMY_DATABASE_URI)
 metadata.create_all(engine)
@@ -76,11 +77,33 @@ def index():
                (votes.snippet_id = snippets.id
                AND (votes.positive=0 OR votes.votername = :name)));''')
         snippets_to_vote_on = list(conn.execute(query, name=session['name']))
-        conn.close()
         if len(snippets_to_vote_on) == 0:
-            return '<p>Congratulations you are done!</p>'
+            return '<p>all of the snippets have been voted on!</p>'
         snippet = choice(snippets_to_vote_on)
-        return render_template("main.html", passage=snippet.text, id=snippet.id)
+        ##  stats
+        totalvotes = list(conn.execute("SELECT COUNT(*) FROM votes"))[0][0]
+        voteless = list(conn.execute(
+            """SELECT COUNT(*) FROM snippets WHERE NOT EXISTS
+            (SELECT * FROM votes where (votes.snippet_id = snippets.id))""")
+            )[0][0]
+        upvotes = str(float(list(conn.execute(
+            "SELECT SUM(positive) FROM votes"))[0][0])*100/totalvotes
+            ) + "%"
+        yourvotes = Counter(
+            item[0] for item in conn.execute(
+                sqlalchemy.sql.text(
+                        "SELECT positive FROM votes WHERE votername = :name"),
+                        name=session['name'])
+                )
+
+        yourvotes = "you, {}, have voted {} yep, {} nop - {}% positivity".format(
+            session['name'],
+            yourvotes[1],
+            yourvotes[0],
+            100*float(yourvotes[1])/len(yourvotes) if yourvotes else "n/a"
+        )
+        conn.close()
+        return render_template("main.html", passage=snippet.text, id=snippet.id, totalvotes=totalvotes, unvoted=voteless, upvotes=upvotes, yourvotes=yourvotes)
     vote = (request.form["vote"] == "True")
     snippet_id = request.form["snippet_id"]
     sys.stderr.write("hi {} {}".format(vote, snippet_id))
@@ -109,6 +132,17 @@ def addsnippet():
             conn.execute(ins)
     conn.close()
     return redirect(url_for('index'))
+
+@app.route("/admin")
+def admin():
+    query = "SELECT * FROM snippets JOIN votes ON snippets.id = votes.snippet_id"
+    conn = engine.connect()
+    votes = conn.execute(query)
+
+    comments = list(conn.execute("""SELECT snippets.text AS passage, comments.text AS comment, comments.votername AS author FROM
+                    snippets JOIN comments ON snippets.id = comments.snippet_id"""))
+    conn.close()
+    return render_template("admin.html", votes=votes, comments=comments)
 
 def splitstuff():
     for section in open("shitpostsfinal.txt").read().split("%["):
