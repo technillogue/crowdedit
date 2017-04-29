@@ -16,6 +16,11 @@
     padding: 0 15px;
     color: #9d9d9d;
 }
+@media (min-width: 768px) {
+.headingsubtitle {
+    padding: 0;
+}
+}
 .container {
     max-width: 600px;
     margin: 0 auto;
@@ -131,12 +136,9 @@
 
 
         <div class="container">
-            i am not good with decision, please to help:
-            <dr></dr>
-
-            <em>you want to vote yep about 20% of the time.
-            vote based on the most polished version of the passage you can imagine; don't vote based on cruft,
-            typos, some part of the passage needing to be cut, etc; vote based on the best part of</em>
+            <em>you want to vote yep about 20% of the time.<br/>
+            yep means "if this were polished, it should be in the final manuscript"<br/>
+            nop means "no matter how polished, no part of this should be in the final manuscript"</em>
         <div class="passagebox">
             <p class="passage">
             {{passage}}

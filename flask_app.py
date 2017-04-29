@@ -4,7 +4,7 @@ from sqlalchemy import *
 import sqlalchemy.sql
 import sqlalchemy
 #from flask_sqlalchemy import SQLAlchemy
-import datetime, sys
+import datetime, sys, re
 from collections import Counter
 from random import choice, shuffle
 
@@ -75,8 +75,7 @@ def index():
         if request.method == "GET":
             query = sqlalchemy.sql.text('''SELECT * FROM snippets WHERE NOT EXISTS
                 (SELECT * FROM votes WHERE
-                   (votes.snippet_id = snippets.id
-                   AND (votes.positive=0 OR votes.votername = :name)));''')
+                   (votes.snippet_id = snippets.id));''')
             snippets_to_vote_on = list(conn.execute(query, name=session['name']))
             if len(snippets_to_vote_on) == 0:
                 return '<p>all of the snippets have been voted on!</p>'
@@ -173,9 +172,9 @@ def admin():
     query = "SELECT * FROM snippets JOIN votes ON snippets.id = votes.snippet_id"
     conn = engine.connect()
     try:
-        voters = [voter[0] for voter in conn.execute("select distinct votername from votes")]
+        voters = Counter([voter[0] for voter in conn.execute("select votername from votes")])
         voterstats = []
-        for voter in voters:
+        for voter in [pair[0] for pair in voters.most_common()]:
             yourvotecount = Counter(
                 item[0] for item in conn.execute(
                     sqlalchemy.sql.text(
@@ -220,6 +219,54 @@ def conn():
             out = [item[0] for item in out]
         return out
     return execute
+
+def collapse_whitespace(t):
+    return re.sub(r'[ \r\n\t]+', ' ', t).strip()
+
+def simplify_text_for_search(t):
+    return collapse_whitespace(re.sub(r'\[day [^\r\n]*\]', '', t))
+
+def snippet_is_broken(t):
+    return not re.search(r'\[day [^\r\n]*\]', t)
+
+def duplicates():
+    conn = engine.connect()
+    try:
+        snippets = list(conn.execute('SELECT * FROM snippets'))
+        replacements = []
+        for snippet in snippets:
+            if snippet_is_broken(snippet.text):
+                searchfor = simplify_text_for_search(snippet.text)
+                replacement = None
+                toomanyduplicates = False
+                for s2 in snippets:
+                    if (s2.id != snippet.id and not snippet_is_broken(s2.text)
+                            and searchfor == simplify_text_for_search(s2.text)):
+                        if replacement == None:
+                            replacement = s2
+                            #print(snippet.id, s2.id, "<<", snippet.text, ">> {{", s2.text, "}}")
+                        else:
+                            print("more than one duplicate", snippet.id, replacement.id, s2.id)
+                            toomanyduplicates = True
+                if replacement != None and not toomanyduplicates:
+                    replacements.append({"oldid": snippet.id, "oldtext": snippet.text,
+                                        "newid": replacement.id, "newtext": replacement.text})
+                    #r = replacements[-1]
+                    #print(r[0]["id"], r[1]["id"], "<<", r[0]["text"], ">> {{", r[1]["text"], "}}")
+        print('updating', len(replacements))
+        #sqlalchemy or mysql won't let me execute them together?
+        for r in replacements:
+            print(r["oldid"], r["newid"])
+            #print(r[0]["id"], r[1]["id"]) #, "<<", r[0]["text"], ">> {{", r[1]["text"], "}}")
+            conn.execute(sqlalchemy.sql.text("UPDATE votes SET votes.snippet_id = :newid WHERE votes.snippet_id = :oldid"),
+                newid=r["newid"], oldid=r["oldid"])
+            conn.execute(sqlalchemy.sql.text("UPDATE comments SET comments.snippet_id = :newid WHERE comments.snippet_id = :oldid"),
+                newid=r["newid"], oldid=r["oldid"])
+            conn.execute(sqlalchemy.sql.text("DELETE FROM snippets WHERE snippets.id = :oldid"),
+                oldid=r["oldid"])
+    finally:
+        conn.close()
+
 
 """
 collapse_whitespace = lambda t: re.sub(r'[ \r\n\t]+', ' ', t)
