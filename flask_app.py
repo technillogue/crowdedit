@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, session, redirect, render_template, request, url_for
+from pprint import pprint as pp
+import pdb
+from flask import Flask, session, redirect, render_template, request, url_for, Response
 from flask_admin import Admin
 from sqlalchemy import *
 import sqlalchemy.sql
 import sqlalchemy
 #from flask_sqlalchemy import SQLAlchemy
-import datetime, sys, re
+import datetime, sys, re, json
 from collections import Counter
 from random import choice, shuffle
+import yaml
 
 app = Flask(__name__)
 app.config["DEBUG"] = True
@@ -68,6 +71,29 @@ def name():
     session['name'] = request.form["name"]
     return redirect(url_for('index'))
 
+def get_weights():
+    try:
+        conn = engine.connect()
+        pubs = ["Guillaume Morrissette", "", "Emily CA", "Rhiannon Collett", "André", "Klara Du Plessis", "blare coughlin"]
+        votes = Counter(v[0] for v in conn.execute("select votername from votes"))
+        weights = {
+            voter:
+                (2 if voter in pubs else 0.5) *
+                (2 ** (votes[voter]/70))
+            for voter in votes.keys()
+            }
+        return weights
+    finally:
+        conn.close()
+
+def best_to_worst(snippets, conn):
+    weights = get_weights()
+    def foo(k):
+        votes_here = conn.execute('''select * from votes where snippet_id='''+str(k.id))
+        rank = -sum(weights[vote.votername]*(vote.positive*2-1) for vote in votes_here)
+        return rank
+    return sorted(snippets, key=foo)
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     if 'name' not in session:
@@ -75,13 +101,23 @@ def index():
     conn = engine.connect()
     try:
         if request.method == "GET":
-            query = sqlalchemy.sql.text('''SELECT * FROM snippets WHERE NOT EXISTS
-                (SELECT * FROM votes WHERE
-                   (votes.snippet_id = snippets.id));''')
+            query = sqlalchemy.sql.text('''SELECT * FROM snippets
+            WHERE NOT EXISTS
+            (SELECT * FROM votes WHERE
+                   (votes.snippet_id = snippets.id
+                   AND (votes.positive=0 OR votes.votername = :name)));
+            ''')  # where not voted-upon
+             #where exists vote.positive="+ "0" if get_best(wc_only=True) > 10000 else "1"+" and vote.id...
             snippets_to_vote_on = list(conn.execute(query, name=session['name']))
             if len(snippets_to_vote_on) == 0:
-                return '<p>all of the snippets have been voted on!</p>'
-            snippet = choice(snippets_to_vote_on)
+                return '<p>you have voted on everything!</p>'
+            weights = get_weights()
+            snippets_to_vote_on.sort(
+                key = lambda snip:sum(
+                    weights[vote.votername] for vote in conn.execute("select * from votes where snippet_id="+str(snip.id))
+                )
+            )
+            snippet = snippets_to_vote_on[0]
 
 
             ##  stats
@@ -89,10 +125,8 @@ def index():
             ranks = [pair[0] for pair in voter_stats.most_common()]
 
             totalvotes = sum(voter_stats.values())
-            voteless = list(conn.execute(
-                """SELECT COUNT(*) FROM snippets WHERE NOT EXISTS
-                (SELECT * FROM votes where (votes.snippet_id = snippets.id))""")
-                )[0][0]
+            voteless = "n/a"
+            Counter([vote.snippet_id for vote in conn.execute("select * from votes")]).most_common()[-1]
             upvotes = str(float(list(conn.execute(
                 "SELECT SUM(positive) FROM votes"))[0][0])*100/totalvotes
                 ) + "%"
@@ -171,30 +205,88 @@ def addsnippet():
     return redirect(url_for('index'))
 
 
-def get_best(conn):
-    snips = list(conn.execute(
-                """SELECT * FROM snippets WHERE EXISTS
-                (SELECT * FROM votes where (votes.snippet_id = snippets.id))"""))
-    ranking = []
-    for snip in snips:
-        votes = [vote[0] for vote in conn.execute("select positive from votes where votes.snippet_id="+str(snip[0]))]
-        ranking.append((sum(map({0:-1,1:1}.get, votes)), str(snip[1])))
-    ranking.sort()
-    output = []
-    wc = 0
-    while wc < 10000 and ranking[-1][0] > 1:
-        output.append(ranking.pop()[1])
-        wc += len(output[-1].split())
-    shuffle(output)
-    return output
+@app.route("/downloadjson", methods=["GET"])
+def downloadjson():
+    return Response(jsonize(), mimetype='application/json; charset=utf-8')
+
+def jsonize():
+    return json.dumps(hierarchize(), indent=4, ensure_ascii=False)
+
+def yamlize():
+    return yaml.dump(hierarchize())
+
+def hierarchize():
+    conn  = engine.connect()
+    try:
+        snippets = list(conn.execute('''
+                SELECT
+                snippets.id AS id,
+                snippets.text AS text,
+                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id) AS votecount,
+                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 1) AS upvotecount,
+                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 0) AS downvotecount,
+                (SELECT COUNT(*) FROM comments WHERE snippets.id = comments.snippet_id) AS commentcount
+                FROM snippets
+                ORDER BY (upvotecount + commentcount - downvotecount) DESC
+                ;'''))
+        snippets = best_to_worst(snippets, conn)
+        datas = (
+            [
+            [
+                snippet.id,
+                snippet.text.replace('\r', ''),
+                [
+                [vote.id, vote.votername, vote.positive]
+                for vote in conn.execute(sqlalchemy.sql.text("select * from votes where snippet_id=:id"), id=snippet.id)
+                ],
+                [
+                [comment.id, comment.votername, comment.text.replace('\r', '')]
+                for comment in conn.execute(sqlalchemy.sql.text("select * from comments where snippet_id=:id"), id=snippet.id)
+                ]
+                ]
+            for snippet in snippets
+            ]
+            )
+        return datas
+    finally:
+        conn.close()
+
+def get_best(threshold=1):
+    conn  = engine.connect()
+    try:
+        snippets = list(conn.execute('''
+                SELECT
+                snippets.id AS id,
+                snippets.text AS text,
+                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id) AS votecount,
+                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 1) AS upvotecount,
+                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 0) AS downvotecount,
+                (SELECT COUNT(*) FROM comments WHERE snippets.id = comments.snippet_id) AS commentcount
+                FROM snippets
+                ORDER BY (upvotecount + commentcount - downvotecount) ASC
+                ;'''))
+        snippets = list(reversed(best_to_worst(snippets, conn)))
+        output = []
+        wc = 0
+        while wc < 10000 and (snippets[-1].upvotecount-snippets[-1].downvotecount) > int(threshold):
+            output.append(snippets.pop().text)
+            wc += len(output[-1].split())
+        output.sort(key=lambda x:len(x))
+        mid = len(output)//2
+        o_1 = output[:mid]
+        o_2 = output[mid:]
+        shuffle(o_1)
+        shuffle(o_2)
+        output = list(sum(zip(o_1, o_2+[0]), ())[:-1])
+        output.insert(0, "word count: " + str(wc))
+        return output
+    finally:
+        conn.close()
 
 @app.route("/best")
 def best():
-    conn  = engine.connect()
-    try:
-       output = get_best(conn)
-    finally:
-        conn.close()
+    threshold =request.args.get("threshold", 1)
+    output = get_best(threshold)
     return "<html><body><div style=\"margin:auto;width:600px\">" + "\n\n".join(output).replace("\n", " <br/> ") + "</div></body><html>"
 
 
@@ -204,9 +296,9 @@ def admin():
     query = "SELECT * FROM snippets JOIN votes ON snippets.id = votes.snippet_id"
     conn = engine.connect()
     try:
-        voters = Counter([voter[0] for voter in conn.execute("select votername from votes")])
         voterstats = []
-        for voter in [pair[0] for pair in voters.most_common()]:
+        weights = get_weights()
+        for voter in weights.keys():
             yourvotecount = Counter(
                 item[0] for item in conn.execute(
                     sqlalchemy.sql.text(
@@ -214,8 +306,9 @@ def admin():
                             name=voter)
                     )
 
-            voterstats.append("{} has commented {} times and voted {} times, {}% positivty".format(
+            voterstats.append("{} - weight {} - has commented {} times and voted {} times, {}% positivty".format(
                 voter if voter else "adam zachery",
+                weights[voter],
                 list(conn.execute(sqlalchemy.sql.text("select count(*) from comments where votername = :name"), name=voter))[0][0],
                 sum(yourvotecount.values()),
                 100*float(yourvotecount[1])/sum(yourvotecount.values()) if yourvotecount else "n/a"

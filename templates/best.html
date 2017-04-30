@@ -4,7 +4,7 @@
         <meta http-equiv="X-UA-Compatible" content="IE=edge">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/css/bootstrap.min.css" integrity="sha512-dTfge/zgoMYpP7QbHy4gWMEGsbsdZeCXz7irItjcC3sPUFtf0kuFbDz/ixG7ArTxmDjLXDmezHubeNikyKGVyQ==" crossorigin="anonymous">
-        <title>pls to help</title>
+        <title>shitposts: best</title>
         <style>
 
 .headingtitle {
@@ -128,7 +128,7 @@
                 <span class="icon-bar"></span>
                 <span class="icon-bar"></span>
               </button>
-              <a class="navbar-brand headingtitle" href="#">shitposts hivemind editing</a>
+              <a class="navbar-brand headingtitle" href="#">shitposts hivemind editing: results!</a>
               <p class="headingsubtitle">i am not good with decisions pls to help</p>
             </div>
           </div>
@@ -136,38 +136,13 @@
 
 
         <div class="container">
-            <em>yep means "if this were polished, it should be in the final manuscript"<br/>
-            nop means "no matter how polished, no part of this should be in the final manuscript"</em>
-        <div class="passagebox">
-            <p class="passage">
-            {{passage}}
-            </p>
-        </div>
-         <div>
-            <form action="." method="POST">
-               <input type="hidden" name="snippet_id" value="{{id}}">
-               <div class="yepnopboxbox">
-                    <div class="yepnopbox">
-                        <button class="yep btn btn-2 btn-2i" type="submit" name="vote" id="vote-up" value="True">yep</button>
-                        <button class="nop btn btn-2 btn-2i" type="submit" name="vote" id="vote-down" value="False">nop</button>
-                    </div>
-               </div>
-               <div class="commentboxbox">
-                <textarea class="commentbox" name="comment" placeholder="Enter a comment (before voting! then vote to submit comment)"></textarea>
-                </div>
-            </form>
-        </div>
-        <div class="stats">
-            statistics:
-            <ul>
+      {% for passage in snippets}
 
-                <li>{{scoreboard}}</li>
-                <li>{{yourvotes}}</li>
-                <li>total votes: {{totalvotes}}</li>
-                <li>snippets without votes: {{unvoted}}</li>
-                <li>% upvotes: {{upvotes}}</li>
-            </ul>
-        </div>
+      <p class="pasasge">
+          {{passage}}
+      </p>
+      {% endfor %}
+
         </div><!-- /.container -->
     </body>
 </html>
