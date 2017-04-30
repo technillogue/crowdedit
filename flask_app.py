@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from flask import Flask, session, redirect, render_template, request, url_for
+from flask_admin import Admin
 from sqlalchemy import *
 import sqlalchemy.sql
 import sqlalchemy
@@ -10,6 +11,7 @@ from random import choice, shuffle
 
 app = Flask(__name__)
 app.config["DEBUG"] = True
+admin = Admin(app, name='enbugstuff', template_mode='bootstrap3', url='/0d20f554eb0bf160df9ef424a1a1b436')
 
 
 # SQL stuff:
@@ -122,20 +124,50 @@ def index():
     finally:
         conn.close()
 
+
+@app.route("/updatesnippet", methods=["GET", "POST"])
+def updatesnippet():
+    conn = engine.connect()
+    try:
+        if request.method == "GET":
+            snippets = conn.execute('''
+            SELECT
+            snippets.id AS id,
+            snippets.text AS text,
+            (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id) AS votecount,
+            (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 1) AS upvotecount,
+            (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 0) AS downvotecount,
+            (SELECT COUNT(*) FROM comments WHERE snippets.id = comments.snippet_id) AS commentcount
+            FROM snippets
+            ORDER BY (upvotecount + commentcount - downvotecount) DESC
+            ;''')
+            return render_template("updatesnippet.html", snippets = snippets)
+        snippetid = int(request.form["id"])
+        newtext = request.form["text"]
+        conn.execute(sqlalchemy.sql.text(
+                            "UPDATE snippets SET text=:text WHERE id=:id"), text=newtext, id=snippetid)
+    finally:
+        conn.close()
+    return redirect(url_for('updatesnippet'))
+
+
+
 @app.route("/addsnippet", methods=["GET", "POST"])
 def addsnippet():
     if request.method == "GET":
         return render_template("addsnippet.html")
     #ins = snippets.insert().values(text = request.args.get("text"))
     conn = engine.connect()
-    for section in request.form["text"].split("%["):
-        title, section = section.split("\n", 1)
-        sys.stderr.write(title)
-        for snippet in section.split("%split%"):
-            snippet = snippet.strip() + "\n[day " + title + "]"
-            ins = snippets.insert().values(text = snippet)
-            conn.execute(ins)
-    conn.close()
+    try:
+        for section in request.form["text"].split("%["):
+            title, section = section.split("\n", 1)
+            sys.stderr.write(title)
+            for snippet in section.split("%split%"):
+                snippet = snippet.strip() + "\n[day " + title + "]"
+                ins = snippets.insert().values(text = snippet)
+                conn.execute(ins)
+    finally:
+        conn.close()
     return redirect(url_for('index'))
 
 
@@ -224,7 +256,7 @@ def collapse_whitespace(t):
     return re.sub(r'[ \r\n\t]+', ' ', t).strip()
 
 def simplify_text_for_search(t):
-    return collapse_whitespace(re.sub(r'\[day [^\r\n]*\]', '', t))
+    return collapse_whitespace(re.sub(r'^%\[.*|\[day [^\r\n]*\]', '', t))
 
 def snippet_is_broken(t):
     return not re.search(r'\[day [^\r\n]*\]', t)
@@ -251,8 +283,7 @@ def duplicates():
                 if replacement != None and not toomanyduplicates:
                     replacements.append({"oldid": snippet.id, "oldtext": snippet.text,
                                         "newid": replacement.id, "newtext": replacement.text})
-                    #r = replacements[-1]
-                    #print(r[0]["id"], r[1]["id"], "<<", r[0]["text"], ">> {{", r[1]["text"], "}}")
+                    print(replacements[-1])
         print('updating', len(replacements))
         #sqlalchemy or mysql won't let me execute them together?
         for r in replacements:
