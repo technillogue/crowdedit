@@ -78,7 +78,7 @@ def get_weights():
         votes = Counter(v[0] for v in conn.execute("select votername from votes"))
         weights = {
             voter:
-                (2 if voter in pubs else 0.5) *
+                (1.5 if voter in pubs else 0.5) *
                 (2 ** (votes[voter]/70))
             for voter in votes.keys()
             }
@@ -86,12 +86,14 @@ def get_weights():
     finally:
         conn.close()
 
+def get_rank(snippet, conn, weights, reverse=1):
+    votes_here = conn.execute(sqlalchemy.sql.text('''select * from votes where snippet_id=:id'''), id=snippet.id)
+    rank = reverse*sum(weights[vote.votername]*{0:-1,1:1}[vote.positive] for vote in votes_here)
+    return rank
+
 def best_to_worst(snippets, conn):
     weights = get_weights()
-    def foo(k):
-        votes_here = conn.execute(sqlalchemy.sql.text('''select * from votes where snippet_id=:id'''), id=k.id)
-        rank = -sum(weights[vote.votername]*(vote.positive*2-1) for vote in votes_here)
-        return rank
+    foo = lambda x:get_rank(x, conn, weights, -1)
     return sorted(snippets, key=foo)
 
 @app.route("/", methods=["GET", "POST"])
@@ -319,7 +321,7 @@ def admin():
     try:
         voterstats = []
         weights = get_weights()
-        for voter in weights.keys():
+        for voter, weight in sorted(weights.items(), key=lambda x:-x[1]):
             yourvotecount = Counter(
                 item[0] for item in conn.execute(
                     sqlalchemy.sql.text(
@@ -329,7 +331,7 @@ def admin():
 
             voterstats.append("{} - weight {} - has commented {} times and voted {} times, {}% positivty".format(
                 voter if voter else "adam zachery",
-                weights[voter],
+                weight,
                 list(conn.execute(sqlalchemy.sql.text("select count(*) from comments where votername = :name"), name=voter))[0][0],
                 sum(yourvotecount.values()),
                 100*float(yourvotecount[1])/sum(yourvotecount.values()) if yourvotecount else "n/a"
