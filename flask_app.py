@@ -78,8 +78,8 @@ def get_weights():
         votes = Counter(v[0] for v in conn.execute("select votername from votes"))
         weights = {
             voter:
-                (1.5 if voter in pubs else 0.5) *
-                (2 ** (votes[voter]/70))
+                (1.5 if voter in pubs else 1.0) *
+                (2 ** (votes[voter]/90)) * 0.5
             for voter in votes.keys()
             }
         return weights
@@ -292,10 +292,12 @@ def get_best(threshold=1):
                 FROM snippets
                 ORDER BY (upvotecount + commentcount - downvotecount) ASC
                 ;'''))
-        snippets = list(reversed(best_to_worst(snippets, conn)))
+        def acceptable(snip):
+            return (snip.upvotecount - snip.downvotecount) > int(threshold)
+        snippets = list(filter(acceptable, reversed(best_to_worst(snippets, conn))))
         output = []
         wc = 0
-        while wc < 10000 and (snippets[-1].upvotecount-snippets[-1].downvotecount) > int(threshold):
+        while wc < 10000 and len(snippets):
             output.append(snippets.pop().text)
             wc += len(output[-1].split())
         output.sort(key=lambda x:len(x))
