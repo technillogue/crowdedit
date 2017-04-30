@@ -103,11 +103,15 @@ def index():
     conn = engine.connect()
     try:
         if request.method == "GET":
+            if request.args.get('mode') == 'up':
+                bad_votes_condition = 'votes.positive=0'
+            else:
+                bad_votes_condition = '0=1'
             query = sqlalchemy.sql.text('''SELECT * FROM snippets
             WHERE NOT EXISTS
             (SELECT * FROM votes WHERE
                    (votes.snippet_id = snippets.id
-                   AND (votes.positive=0 OR votes.votername = :name)));
+                   AND ('''+bad_votes_condition+''' OR votes.votername = :name)));
             ''')  # where not voted-upon
              #where exists vote.positive="+ "0" if get_best(wc_only=True) > 10000 else "1"+" and vote.id...
             snippets_to_vote_on = list(conn.execute(query, name=session['name']))
