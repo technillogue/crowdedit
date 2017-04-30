@@ -89,7 +89,7 @@ def get_weights():
 def best_to_worst(snippets, conn):
     weights = get_weights()
     def foo(k):
-        votes_here = conn.execute('''select * from votes where snippet_id='''+str(k.id))
+        votes_here = conn.execute(sqlalchemy.sql.text('''select * from votes where snippet_id=:id'''), id=k.id)
         rank = -sum(weights[vote.votername]*(vote.positive*2-1) for vote in votes_here)
         return rank
     return sorted(snippets, key=foo)
@@ -114,7 +114,8 @@ def index():
             weights = get_weights()
             snippets_to_vote_on.sort(
                 key = lambda snip:sum(
-                    weights[vote.votername] for vote in conn.execute("select * from votes where snippet_id="+str(snip.id))
+                    weights[vote.votername] for vote in
+                    conn.execute(sqlalchemy.sql.text("select * from votes where snippet_id=:id"),id=snip.id)
                 )
             )
             snippet = snippets_to_vote_on[0]
