@@ -210,6 +210,26 @@ def addsnippet():
 def downloadjson():
     return Response(jsonize(), mimetype='application/json; charset=utf-8')
 
+@app.route("/uploadjson", methods=["GET", "POST"])
+def uploadjson():
+    if request.method == "GET":
+        return render_template("uploadjson.html")
+    newstuff = json.loads(request.form["json"])
+    conn = engine.connect()
+    try:
+        updatecount = 0
+        for newthing in newstuff:
+            snippetid = newthing[0]
+            newtext = newthing[1]
+            updatecount += conn.execute(
+                    sqlalchemy.sql.text(
+                            "UPDATE snippets SET text=:newtext WHERE id=:id AND text != :newtext"),
+                        id=snippetid, newtext=newtext
+                    ).rowcount
+        return redirect(url_for('uploadjson') + '?were_updated_count=' + str(updatecount))
+    finally:
+        conn.close()
+
 def jsonize():
     return json.dumps(hierarchize(), indent=4, ensure_ascii=False)
 
