@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 from pprint import pprint as pp
 import pdb
@@ -9,7 +10,7 @@ import sqlalchemy
 #from flask_sqlalchemy import SQLAlchemy
 import datetime, sys, re, json
 from collections import Counter
-from random import choice, shuffle
+from random import shuffle, randint
 import yaml
 
 app = Flask(__name__)
@@ -74,7 +75,7 @@ def name():
 def get_weights():
     try:
         conn = engine.connect()
-        pubs = ["Guillaume Morrissette", "", "Emily CA", "Rhiannon Collett", "André", "Klara Du Plessis", "blare coughlin"]
+        pubs = ["Guillaume Morrissette", "Emily CA", "Rhiannon Collett", "André", "Klara Du Plessis", "blare coughlin"]
         votes = Counter(v[0] for v in conn.execute("select votername from votes"))
         weights = {
             voter:
@@ -86,15 +87,21 @@ def get_weights():
     finally:
         conn.close()
 
-def get_rank(snippet, conn, weights, reverse=1):
+def get_rank(snippet, conn, weights):
     votes_here = conn.execute(sqlalchemy.sql.text('''select * from votes where snippet_id=:id'''), id=snippet.id)
-    rank = reverse*sum(weights[vote.votername]*{0:-1,1:1}[vote.positive] for vote in votes_here)
+    rank = sum(weights[vote.votername]*{0:-1,1:1}[vote.positive] for vote in votes_here)
     return rank
 
-def best_to_worst(snippets, conn):
+def best_to_worst(snippets, conn, ranked=False):
     weights = get_weights()
-    foo = lambda x:get_rank(x, conn, weights, -1)
-    return sorted(snippets, key=foo)
+    ranks = sorted([
+        (get_rank(snippet, conn, weights), snippet)
+        for snippet in snippets
+    ], reverse=True)
+    if ranked:
+        return ranks
+    else:
+        return list(zip(*ranks))[-1]
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -287,36 +294,61 @@ def get_best(threshold=1):
                 snippets.text AS text,
                 (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id) AS votecount,
                 (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 1) AS upvotecount,
-                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 0) AS downvotecount,
-                (SELECT COUNT(*) FROM comments WHERE snippets.id = comments.snippet_id) AS commentcount
+                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.positive = 0) AS downvotecount
                 FROM snippets
-                ORDER BY (upvotecount + commentcount - downvotecount) ASC
-                ;'''))
+                ORDER BY (upvotecount - downvotecount) ASC
+                ;''')) # most of it is redundant
+
         def acceptable(snip):
-            return (snip.upvotecount - snip.downvotecount) > int(threshold)
+            return (snip.upvotecount - snip.downvotecount) > (0.8 + float(threshold))
         snippets = list(filter(acceptable, reversed(best_to_worst(snippets, conn))))
         output = []
         wc = 0
+        early = []
+        end = []
+        late = []
         while wc < 10000 and len(snippets):
-            output.append(snippets.pop().text)
-            wc += len(output[-1].split())
+            snippet = snippets.pop()
+            if int(snippet.id) == 3579:
+                end.append(snippet.text)
+            elif int(snippet.id) == 3580:
+                late.append(snippet.text)
+            elif int(snippet.id) in (2855, 2847):
+                early.append(snippet.text)
+            else:
+                output.append(snippet.text)
+            wc += len(snippet.text.split())
+        # randomize order
         output.sort(key=lambda x:len(x))
         mid = len(output)//2
         o_1 = output[:mid]
         o_2 = output[mid:]
         shuffle(o_1)
         shuffle(o_2)
+        for snippet in early:
+            #all of these are long
+            o_2.insert(
+                randint(0, mid//10),
+                snippet
+            )
+        for snippet in late:
+            #all [one] of these is short
+            o_1.insert(
+                randint(-mid//10, -1),
+                snippet
+            )
         output = list(sum(zip(o_1, o_2+[0]), ())[:-1])
         output.insert(0, "word count: " + str(wc))
+        output.extend(end)
         return output
     finally:
         conn.close()
 
 @app.route("/best")
 def best():
-    threshold =request.args.get("threshold", 1)
+    threshold =request.args.get("threshold", 0)
     output = get_best(threshold)
-    return "<html><body><div style=\"margin:auto;width:600px\">" + "\n\n".join(output).replace("\n", " <br/> ") + "</div></body><html>"
+    return "<html><body><div style=\"margin:auto;width:600px\"><p>" + "</p><p>".join(output).replace("\n", " <br/> ") + "</p></div></body><html>"
 
 
 
@@ -372,7 +404,16 @@ def conn():
         if len(out[0]) == 1:
             out = [item[0] for item in out]
         return out
+    try:
+        execute("select * from snippets where id = 0")
+        # the first command will sometimes fail, so this is a dummy command
+        # to make sure the connection is working
+    except:
+        pass
     return execute
+
+def vote(snippet_id, positive=1, votername="em"):
+    c('insert into votes (snippet_id, positive, votername) values (%s, %s, "%s");' % (snippet_id, positive, votername))
 
 def collapse_whitespace(t):
     return re.sub(r'[ \r\n\t]+', ' ', t).strip()
