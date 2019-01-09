@@ -1,10 +1,4 @@
 # -*- coding: utf-8 -*-
-# TODO: move weight calculation to when the vote is made
-# figure out how to COUNT
-# use relational ORDER BY SUM SELECT WEIGHT FROM VOTES
-
-
-
 import datetime
 import sys
 import re
@@ -13,14 +7,19 @@ from collections import Counter
 from random import shuffle, randint
 from flask import Flask, session, redirect, render_template, request, url_for, Response
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import or_, not_, exists
+from sqlalchemy import and_, or_, not_, exists
 from sqlalchemy.orm import aliased
-from sqlalchemy.sql.expression import func
+from sqlalchemy.sql.expression import func, case
 
-from sqlalchemy import *
-import sqlalchemy.sql
-import sqlalchemy
+# for updating activity_count after manually changing votes or comments:
+#UPDATE public.user SET activity_count = (select count(*) from vote where vote.user_id = "user".id) + (select count(*) from comment where comment.user_id="user".id);
 
+# TODOs:
+# - finish output
+# - export/import
+# - admin
+# - editing (with edited_at)
+# - alter weights to favor less extreme voters
 
 IMPORTANT_NAMES = [
     u"Guillaume Morrissette",
@@ -31,44 +30,19 @@ IMPORTANT_NAMES = [
     u"blare coughlin"
 ]
 
+SNIPPET_PLACEMENT = {
+    2855: "early",
+    2847: "early",
+    3580: "late",
+    3578: "end"
+}
+
 
 app = Flask(__name__)
 app.config["DEBUG"] = True
 
 if app.config["DEBUG"]:
     from pprint import pprint as pp
-
-##### SQLAlcehmy SQL stuff:
-metadata = MetaData(schema="crowdedit")
-snippets = Table("snippets", metadata,
-    Column("id", Integer, primary_key=True),
-    Column("text", Text, nullable=False, default="")
-)
-votes = Table("votes", metadata,
-    Column("id", Integer, primary_key=True),
-    Column("snippet_id", Integer, nullable=False, index=True),
-    Column("valence", Boolean, nullable=False, index=True),
-    Column("user", String(128), index=True),
-    Column("created_at", Date, default=datetime.datetime.now),
-)
-
-comments = Table("comments", metadata,
-    Column("id", Integer, primary_key=True),
-    Column("text", Text, nullable=False, default=""),
-    Column("snippet_id", Integer, nullable=False, index=True),
-    Column("user", String(128), index=True),
-    Column("created_at", Date, default=datetime.datetime.now),
-)
-
-
-OLD_SQLALCHEMY_DATABASE_URI = "mysql+mysqlconnector://{username}:{password}@{hostname}/{databasename}?charset=utf8mb4".format(
-    username="enbug",
-    password="rqnyfdztwutldbkwvhwk",
-    hostname="localhost",#"enbug.mysql.pythonanywhere-services.com",
-    databasename="enbug$project",
-)
-
-##########3
 
 SQLALCHEMY_DATABASE_URI = "postgres+psycopg2://{username}:{password}@{hostname}/{databasename}".format(
     username="enbug",
@@ -80,13 +54,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
 app.config["SQLALCHEMY_POOL_RECYCLE"] = 10
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-engine = create_engine(SQLALCHEMY_DATABASE_URI, client_encoding='utf8')
-metadata.create_all(engine)
-
 db = SQLAlchemy(app)
-
-
-#UPDATE public.user SET activity_count = (select count(*) from vote where vote.user_id = "user".id) + (select count(*) from comment where comment.user_id="user".id);
 
 
 class Snippet(db.Model):
@@ -108,6 +76,10 @@ class User(db.Model):
         return "<User #{}, {}>".format(self.id, self.name)
 
     def vote(self, valence, snippet_id):
+        """
+        decides what the weight should be, logs it, adds it to the session,
+        but doesn't commit
+        """
         weight = 1.8 / (1 + 2**-((self.activity_count - 12)/14))
         # sigmoid function, ranges from 0.6 to 1.8,
         # halfway point of 1.2 when a user has voted 28 times.
@@ -134,7 +106,7 @@ class User(db.Model):
 
 class Vote(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    valence = Column(db.Boolean, nullable=False, index=True)
+    valence = db.Column(db.Boolean, nullable=False, index=True)
     snippet_id = db.Column(
         db.Integer,
         db.ForeignKey("snippet.id"),
@@ -164,13 +136,13 @@ class Comment(db.Model):
     text = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.Date, default=datetime.datetime.now)
     snippet_id = db.Column(
-        Integer,
+        db.Integer,
         db.ForeignKey("snippet.id"),
         nullable=False,
         index=True
     )
     user_id = db.Column(
-        Integer,
+        db.Integer,
         db.ForeignKey("user.id"),
         nullable=False,
         index=True
@@ -185,9 +157,6 @@ class Comment(db.Model):
         )
 
 db.create_all()
-
-
-
 
 app.secret_key = 'this is unnecessary'
 # we don't validate the user's identity in any way
@@ -205,8 +174,10 @@ def add_snippet():
     added_snippets = 0
     for section in request.form["text"].split("%["):
         if section:
-            if "%[" in request.form["text"]:
-                title, section = section.split("\n", 1)
+            if "]%" in section:
+                title, section = section.split("]%")
+                title = title.strip()
+                section.section.strip()
                 app.logger.info(title)
             else:
                 title = ""
@@ -249,6 +220,10 @@ def debug():
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    """
+    on GET selects a snippet for the user to vote on and generates stats;
+    on POST enters the vote.
+    """
     if "user_name" not in session: # refactor as user_id
         return render_template("name.html")
     current_user = User.query.get(session["user_id"])
@@ -261,8 +236,9 @@ def index():
         #WHERE personal.id IS NULL
         #GROUP BY snippet.id
         #ORDER BY sum(vote.weight);
+        query = Snippet.query
         if not request.args.get("repeat_vote", "") == "1":
-            query = Snippet.query.filter(
+            query = query.filter(
                 ~exists().where(
                     and_(
                         Vote.snippet_id == Snippet.id,
@@ -270,6 +246,13 @@ def index():
                     )
                 ).label("votes")
             )
+        if request.args.get("random_order", "") == "1":
+            query = query.order_by(func.random())
+        else:
+            vote_alias = aliased(Vote, name="vote_alias")
+            query = query.outerjoin(vote_alias).group_by(Snippet.id).order_by(
+                func.sum(vote_alias.weight)
+                )
         if app.config["DEBUG"]:
             expected_snippets = (
                 Snippet.query.count()
@@ -281,16 +264,10 @@ def index():
                 actual_snippets
             ))
             assert (actual_snippets == expected_snippets)
-        else:
-            query = Snippet.query
-        if request.args.get("random_order", "") == "1":
-            query = query.order_by(func.random())
-        else:
-            vote_alias = aliased(Vote, name="vote_alias")
-            query = query.join(vote_alias).group_by(Snippet.id).order_by(
-                func.sum(vote_alias.weight)
-                )
+
         snippet = query.first()
+        if snippet is None:
+            return "<p> you have voted on every snippet! </p>"
         app.logger.info(
             "for user {} '{}', selected snippet {} out of {} remaining".format(
                 current_user.id,
@@ -299,44 +276,41 @@ def index():
                 query.count()
             )
         )
-        if snippet is None:
-            return "<p> you have voted on every snippet! </p>"
-        else:
-            average_activity = User.query.with_entities(
-                    func.sum(User.activity_count)
-                ).scalar() / float(User.query.count())
-            yep_count = Vote.query.filter(
-                    Vote.user_id==current_user.id,
-                    Vote.valence==True
-                ).count()
-            nop_count = Vote.query.filter(
-                    Vote.user_id==current_user.id,
-                    Vote.valence==False
-                ).count()
-            stats = [
-                "you, user #{}, {}, have voted and commented {} times".format(
-                        current_user.id,
-                        current_user.name,
-                        current_user.activity_count
-                    ),
-                "the average user has voted and commented {} times".format(
-                        average_activity
-                    ),
-                "you have voted {} yep and {} nop, {}% positivity".format(
-                        yep_count,
-                        nop_count,
-                        int(100 * yep_count / float(yep_count + nop_count))
-                    ),
-                "{} snippets that you can vote on remain".format(
-                        query.count()
-                    ),
-            ]
-            return render_template(
-                "main.html",
-                passage=snippet.text,
-                id=snippet.id,
-                stats=stats
-            )
+        average_activity = User.query.with_entities(
+                func.sum(User.activity_count)
+            ).scalar() / float(User.query.count())
+        yep_count = Vote.query.filter(
+                Vote.user_id==current_user.id,
+                Vote.valence==True
+            ).count()
+        nop_count = Vote.query.filter(
+                Vote.user_id==current_user.id,
+                Vote.valence==False
+            ).count()
+        stats = [
+            "you, user #{}, {}, have voted and commented {} times".format(
+                    current_user.id,
+                    current_user.name,
+                    current_user.activity_count
+                ),
+            "the average user has voted and commented {} times".format(
+                    average_activity
+                ),
+            "you have voted {} yep and {} nop, {}% positivity".format(
+                    yep_count,
+                    nop_count,
+                    int(100 * yep_count / float(yep_count + nop_count))
+                ),
+            "{} snippets that you can vote on remain".format(
+                    query.count()
+                ),
+        ]
+        return render_template(
+            "main.html",
+            passage=snippet.text,
+            id=snippet.id,
+            stats=stats
+        )
     valence = (request.form["vote"] == "True")
     snippet_id = request.form["snippet_id"]
 
@@ -354,243 +328,84 @@ def index():
 
 
 
-def get_rank(snippet, conn, weights, return_weight=False):
-    votes_here = conn.execute(sqlalchemy.sql.text('''select * from votes where snippet_id=:id'''), id=snippet.id)
-    total_weight = 0
-    total_valence = False
-    for vote in votes_here:
-        weight = weights[vote.user]
-        total_valence += {0:-1, 1:1}[vote.valence] * weight
-        total_weight += weight
-    try:
-        rank = total_valence / (total_weight)**0.1
-        # this isn't quite a weighted average -- of snippets where 100% of
-        # people voted for them, those where more people voted should have
-        # higher rankings than those where less people voted. however, this
-        # should be scaled down... I might be completely wrong.
-    except ZeroDivisionError:
-        rank = 0
-    return (rank, total_weight) if return_weight else rank
-
-def best_to_worst(snippets, conn, ranked=False):
-    weights = get_weights()
-    ranks = sorted([
-        (get_rank(snippet, conn, weights, ranked), snippet)
-        for snippet in snippets
-    ], reverse=True)
-    if ranked:
-        return ranks
-    else:
-        return list(zip(*ranks))[-1]
-
-
-def jsonize():
-    return json.dumps(hierarchize(), indent=4, ensure_ascii=False)
-
-#def yamlize():
-#    return yaml.dump(hierarchize())
-
-def hierarchize():
-    conn  = engine.connect()
-    try:
-        snippets = list(conn.execute('''
-                SELECT
-                snippets.id AS id,
-                snippets.text AS text,
-                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id) AS votecount,
-                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.valence = True) AS upvotecount,
-                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.valence = False) AS downvotecount,
-                (SELECT COUNT(*) FROM comments WHERE snippets.id = comments.snippet_id) AS commentcount
-                FROM snippets
-                ORDER BY (upvotecount + commentcount - downvotecount) DESC
-                ;'''))
-        snippets = best_to_worst(snippets, conn)
-        datas = (
-            [
-            [
-                snippet.id,
-                snippet.text.replace('\r', ''),
-                [
-                [vote.id, vote.user, vote.valence]
-                for vote in conn.execute(sqlalchemy.sql.text("select * from votes where snippet_id=:id"), id=snippet.id)
-                ],
-                [
-                [comment.id, comment.user, comment.text.replace('\r', '')]
-                for comment in conn.execute(sqlalchemy.sql.text("select * from comments where snippet_id=:id"), id=snippet.id)
-                ]
-                ]
-            for snippet in snippets
-            ]
+@app.route("/best")
+def best():
+    score_threshold = request.args.get("score_threshold", 0)
+    show_scores = request.args.get("show_scores", False)
+    wordcount_goal = int(request.args.get("wordcount", 10000))
+    snippets = Snippet.query.with_entities(
+        Snippet.text,
+        Snippet.id,
+        func.sum(
+            case({True: Vote.weight, False:-Vote.weight}, value=Vote.valence)
+        ).label("score"),
+        func.sum(Vote.weight).label("total_weight")
+    ).join(Vote).group_by(Snippet.id).order_by("score").all()
+    # select up to goal_wc of the best snippets, seperating snippets
+    # that should be in specific parts of the output, and rendering the text
+    wordcount = 0
+    selected_snippets = []
+    special_placement = {"start": [], "early": [], "late": [], "end": []}
+    while wordcount < wordcount_goal and len(snippets):
+        snippet = snippets.pop()
+        wordcount += len(snippet.text.split())
+        if show_scores:
+            text = "{}\n[score: {:.3f}/{:.3f}]".format(
+                snippet.text,
+                snippet.score,
+                snippet.total_weight
             )
-        return datas
-    finally:
-        conn.close()
-
-
-def splitstuff():
-    minidb = []
-    for section in open("shitpostsfinal.txt").read().split("%["):
-        if section:
-            title, section = section.split("\n", 1)
-            sys.stderr.write(title)
-            for snippet in section.split("%split%"):
-                snippet = snippet.strip() + "\n[day " + title + "]"
-                #ins = snippets.insert().values(text = snippet)
-                #conn.execute(ins)
-                minidb.append(snippet)
-
-    return minidb
-
-
-def conn():
-    conn = engine.connect()
-    def execute(command, flat=True):
-        out = list(conn.execute(command))
-        if len(out[0]) == 1:
-            out = [item[0] for item in out]
-        return out
-    try:
-        execute("select * from snippets where id = 0")
-        # the first command will sometimes fail, so this is a dummy command
-        # to make sure the connection is working
-    except:
-        pass
-    return execute
-
-def vote(snippet_id, valence=True, user="em"):
-    c('insert into votes (snippet_id, valence, user) values (%s, %s, "%s");' % (snippet_id, valence, user))
-
-def collapse_whitespace(t):
-    return re.sub(r'[ \r\n\t]+', ' ', t).strip()
-
-def simplify_text_for_search(t):
-    return collapse_whitespace(re.sub(r'^%\[.*|\[day [^\r\n]*\]', '', t))
-
-def snippet_is_broken(t):
-    return not re.search(r'\[day [^\r\n]*\]', t)
-
-
-def duplicates():
-    conn = engine.connect()
-    try:
-        snippets = list(conn.execute('SELECT * FROM snippets'))
-        replacements = []
-        for snippet in snippets:
-            if snippet_is_broken(snippet.text):
-                searchfor = simplify_text_for_search(snippet.text)
-                replacement = None
-                toomanyduplicates = False
-                for s2 in snippets:
-                    if (s2.id != snippet.id and not snippet_is_broken(s2.text)
-                            and searchfor == simplify_text_for_search(s2.text)):
-                        if replacement == None:
-                            replacement = s2
-                            #print(snippet.id, s2.id, "<<", snippet.text, ">> {{", s2.text, "}}")
-                        else:
-                            print("more than one duplicate", snippet.id, replacement.id, s2.id)
-                            toomanyduplicates = True
-                if replacement != None and not toomanyduplicates:
-                    replacements.append({"oldid": snippet.id, "oldtext": snippet.text,
-                                        "newid": replacement.id, "newtext": replacement.text})
-                    print(replacements[-1])
-        print('updating', len(replacements))
-        #sqlalchemy or mysql won't let me execute them together?
-        for r in replacements:
-            print(r["oldid"], r["newid"])
-            #print(r[0]["id"], r[1]["id"]) #, "<<", r[0]["text"], ">> {{", r[1]["text"], "}}")
-            conn.execute(sqlalchemy.sql.text("UPDATE votes SET votes.snippet_id = :newid WHERE votes.snippet_id = :oldid"),
-                newid=r["newid"], oldid=r["oldid"])
-            conn.execute(sqlalchemy.sql.text("UPDATE comments SET comments.snippet_id = :newid WHERE comments.snippet_id = :oldid"),
-                newid=r["newid"], oldid=r["oldid"])
-            conn.execute(sqlalchemy.sql.text("DELETE FROM snippets WHERE snippets.id = :oldid"),
-                oldid=r["oldid"])
-    finally:
-        conn.close()
-
-
-"""
-collapse_whitespace = lambda t: re.sub(r'[ \r\n\t]+', ' ', t)
-search = lambda term, seq:[item for item in seq if collapse_whitespace(term) in collapse_whitespace(item[1])]
-txt = splitstuff()
-e = conn()
-sql = enumerate(e('select text from snippets where text like "%[days%"'))
-def find_index(index, src=txt, trgt=sql):
-    term = src[index][1]
-    l = len(term)
-    return search(term[l//3:2*l//3], trgt)
-   """
-
-"""
-if (doesn't have suffix) and (there's snippet with a different id and part of the same text that does have a suffix):
-    for each vote with this snipet id, update the vote's id to the new snippet
-    delete the suffexless one.
-    """
-
-
-def get_best(threshold=1, scores=False, goal_wc=10000):
-    conn  = engine.connect()
-    try:
-        snippets = list(conn.execute("SELECT id, text FROM snippets"))
-        '''
-                SELECT
-                snippets.id AS id,
-                snippets.text AS text,
-                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id) AS votecount,
-                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.valence = True) AS upvotecount,
-                (SELECT COUNT(*) FROM votes WHERE snippets.id = votes.snippet_id AND votes.valence = False) AS downvotecount
-                FROM snippets
-                ORDER BY (upvotecount - downvotecount) ASC
-                ;'''# most of it is redundant
-
-        snippets = list(
-            filter(
-                lambda snippet:snippet[0][0] > float(threshold),
-                reversed(best_to_worst(snippets, conn, True))
-            )
-        ) # worst to best, for efficient popping
-        output = []
-        wc = 0
-        early = []
-        end = []
-        late = []
-        while wc < int(goal_wc) and len(snippets):
-            rank, snippet = snippets.pop()
-            wc += len(snippet.text.split())
-            dest = {3579:end, 3580:late, 2855: early, 2847: early}
-            dest.get(snippet.id, output).append(
-                snippet.text + "\n[score: {:.3f}/{:.3f}]".format(rank[0], rank[1]) \
-                if scores else snippet.text
-
-            )
-        # randomize order
-        output.sort(key=lambda x:len(x))
-        mid = len(output)//2
-        o_1 = output[:mid]
-        o_2 = output[mid:]
-        shuffle(o_1)
-        shuffle(o_2)
-        for snippet in early:
-            #all of these are long
-            o_2.insert(
-                randint(0, mid//10),
-                snippet
-            )
-        for snippet in late:
-            #all [one] of these is short
-            o_1.insert(
-                randint(-mid//10, -1),
-                snippet
-            )
-        output = list(sum(zip(o_1, o_2+[0]), ())[:-1])
-        output.insert(0, "word count: " + str(wc))
-        output.extend(end)
-        return output
-    finally:
-        conn.close()
-
-
-
-
+        else:
+            text = snippet.text
+        if snippet.id in SNIPPET_PLACEMENT:
+            special_placement[SNIPPET_PLACEMENT[snippet.id]].append(text)
+        else:
+            selected_snippets.append(text)
+    # randomize order, alternating between long and short snippets
+    # randomly insert "early" snippets into the first 10% of the output
+    # randomly insert "late" snippets into the last 10% of the output
+    middle = int(len(selected_snippets)/2)
+    sorted_by_length = sorted(
+        selected_snippets,
+        key = lambda snippet: len(snippet)
+    )
+    middle_length = len(sorted_by_length[middle])
+    shorter = sorted_by_length[:middle]
+    longer = sorted_by_length[middle:]
+    shuffle(shorter)
+    shuffle(longer)
+    for dest, snippet in special_placement.items():
+        target_length = shorter if len(snippet) < middle_length else longer
+        target_index = {
+            "start": 0,
+            "early": randint(0, int(len(selected_snippets)/10)),
+            "late": randint(-int(len(selected_snippets)/10), -1),
+            "end": -1
+        }[dest]
+        target_length.insert(target_index, snippet)
+        # this probably doesn't scale great
+        # a better approach might be deciding be choosing the indexes of the
+        # early and late snippets in advance, then building the output list
+        # using while and pop and appending the early/late ones while the
+        # list is being built. choosing the indexes correctly so that the
+        # shorter/longer cadence is preserved is tricky.
+        # `randint(0, len(selected_snippets)/20)*2 + 1 if len(snippet) >
+        # meddle_length else 0` might do the trick
+        # however, i assume that there are relatively few snippets and
+        # this output is generately rarely enough that it would be foolish
+        # to write this harder-to-read optimization at this point in time.
+    shorter.reverse()
+    longer.reverse()
+    # preserves order of insertion for more efficent popping
+    # easier to read but more expensive than doing the opposite inserts
+    output = ["word count: {}".format(wordcount)]
+    while shorter or longer:
+        try:
+            output.append(shorter.pop())
+            output.append(longer.pop())
+        except IndexError:
+            pass
+    return render_template("best.html", snippets=output)
 
 @app.route("/updatesnippet", methods=["GET", "POST"])
 def updatesnippet():
@@ -678,16 +493,6 @@ takes [[snippet_id, snippet_text, [[vote_id, user, vote_valence],
 ...], [comment_id, user, comment], ...]
 returns ([snippets], [votes], [comments]
 """
-
-@app.route("/best")
-def best():
-    threshold =request.args.get("threshold", 0)
-    scores=request.args.get("scores", False)
-    wc=request.args.get("wc", 10000)
-    output = get_best(threshold, scores, wc)
-    return "<html><body><div style=\"margin:auto;width:600px\"><p>" + "</p><p>".join(output).replace("\n", " <br/> ") + "</p></div></body><html>"
-
-
 
 @app.route("/admin")
 def admin():

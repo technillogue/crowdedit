@@ -1,3 +1,4 @@
+"""
 import os
 import tempfile
 
@@ -19,3 +20,4 @@ def client():
 
     os.close(db_fd)
     os.unlink(flaskr.app.config['DATABASE'])
+"""
