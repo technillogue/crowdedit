@@ -7,9 +7,8 @@ from collections import Counter
 from random import shuffle, randint
 from flask import Flask, session, redirect, render_template, request, url_for, Response
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import and_, or_, not_, exists
-from sqlalchemy.orm import aliased
-from sqlalchemy.sql.expression import func, case
+from sqlalchemy import and_, or_, not_, exists, alias, case, func, cast
+
 
 # for updating activity_count after manually changing votes or comments:
 #UPDATE public.user SET activity_count = (select count(*) from vote where vote.user_id = "user".id) + (select count(*) from comment where comment.user_id="user".id);
@@ -249,7 +248,7 @@ def index():
         if request.args.get("random_order", "") == "1":
             query = query.order_by(func.random())
         else:
-            vote_alias = aliased(Vote, name="vote_alias")
+            vote_alias = alias(Vote, name="vote_alias")
             query = query.outerjoin(vote_alias).group_by(Snippet.id).order_by(
                 func.sum(vote_alias.weight)
                 )
@@ -287,6 +286,10 @@ def index():
                 Vote.user_id==current_user.id,
                 Vote.valence==False
             ).count()
+        if nop_count:
+            positivity = int(100 * yep_count / float(yep_count + nop_count))
+        else:
+            positivity = "n/a"
         stats = [
             "you, user #{}, {}, have voted and commented {} times".format(
                     current_user.id,
@@ -299,7 +302,7 @@ def index():
             "you have voted {} yep and {} nop, {}% positivity".format(
                     yep_count,
                     nop_count,
-                    int(100 * yep_count / float(yep_count + nop_count))
+                    positivity
                 ),
             "{} snippets that you can vote on remain".format(
                     query.count()
@@ -407,6 +410,129 @@ def best():
             pass
     return render_template("best.html", snippets=output)
 
+
+@app.route("/new_admin")
+def new_admin():
+    organize_by = request.args.get("organize_by", "time") # or "snippet"
+    positive_vote = Vote.query.with_entities(
+        Vote.user_id,
+        func.count(Vote.id).label("vote_count")
+    ).filter(Vote.valence).group_by(Vote.user_id).subquery()
+    all_vote = alias(Vote)
+    user_stats = User.query.with_entities(
+        User.id,
+        User.name,
+        User.activity_count,
+        (
+            cast(
+                positive_vote.c.vote_count
+                / cast(func.count(all_vote.c.id), db.Float)
+                * 100,
+                db.Integer
+            )
+        ).label("positivity")
+    ).outerjoin(
+        positive_vote,
+        positive_vote.c.user_id==User.id
+    ).outerjoin(
+        all_vote,
+        all_vote.c.user_id == User.id
+    ).group_by(User.id, positive_vote.c.vote_count).order_by(User.id).all()
+
+
+    snippets = []
+    for snippet in Snippet.query.all():
+        snippets.append({
+            "text": snippet.text,
+            "votes": Vote.query.with_entities(
+                    Vote.user_id,
+                    User.name.label("user_name"),
+                    Vote.valence
+                ).join(User).filter(Vote.snippet_id == snippet.id).all(),
+            "comments": Comment.query.with_entities(
+                    Comment.user_id,
+                    User.name.label("user_name"),
+                    Comment.text
+                ).join(User).filter(Vote.snippet_id == snippet.id).all()
+        })
+
+    return render_template(
+        "admin.html",
+        user_stats = user_stats,
+        snippets = snippets
+    )
+
+
+"""
+SELECT
+    public.user.id,
+    public.user.name,
+    public.user.activity_count,
+    pos.votes/CAST(count(everything.id) as float) AS positivity
+FROM
+    public.user
+LEFT JOIN
+    (SELECT
+        user_id, COUNT(*) AS votes
+    FROM
+        vote
+    WHERE
+        valence=true
+    GROUP BY
+        user_id) AS pos
+ON
+    public.user.id = pos.user_id
+LEFT JOIN
+    vote as everything
+ON
+    public.user.id=everything.user_id
+GROUP BY
+    public.user.id, pos.votes
+ORDER BY
+public.user.id;
+"""
+
+
+@app.route("/admin")
+def admin():
+    table = request.args.get("table")
+    query = "SELECT * FROM snippets JOIN votes ON snippets.id = votes.snippet_id ORDER BY votes.created_at"
+    conn = engine.connect()
+    try:
+        voterstats = ["name;\t\tweight;\t\tvotes;\t\tpositivity;\t\tcomments"] if table else []
+        weights = get_weights()
+        for voter, weight in sorted(weights.items(), key=lambda x:-x[1]):
+            yourvotecount = Counter(
+                item[0] for item in conn.execute(
+                    sqlalchemy.sql.text(
+                            "SELECT valence FROM votes WHERE user = :name"),
+                            name=voter)
+                    )
+            voterstats.append(
+                ((lambda *x:";\t\t".join(x)) if table else ("{} - weight {} - has voted {} times, {}% positivty, and commented {} times".format))(
+                *map(str, (
+                    voter if voter else "adam zachery",
+                    weight,
+                    sum(yourvotecount.values()),
+                    100*float(yourvotecount[1])/sum(yourvotecount.values()) if yourvotecount else "n/a",
+                    list(conn.execute(sqlalchemy.sql.text(u"select count(*) from comments where user = :name"), name=voter.encode("utf-8")))[0][0]
+                ))
+                )
+            )
+        votes = conn.execute(query)
+        comments = list(conn.execute("""SELECT snippets.text AS passage, comments.text AS comment, comments.user AS author FROM
+                    snippets JOIN comments ON snippets.id = comments.snippet_id ORDER BY comments.created_at"""))
+    finally:
+        conn.close()
+    return render_template("admin.html", voterstats=voterstats, votes=votes, comments=comments)
+
+
+
+
+
+
+
+
 @app.route("/updatesnippet", methods=["GET", "POST"])
 def updatesnippet():
     conn = engine.connect()
@@ -431,11 +557,6 @@ def updatesnippet():
     finally:
         conn.close()
     return redirect(url_for('updatesnippet'))
-
-
-
-
-
 
 
 @app.route("/downloadjson", methods=["GET"])
@@ -493,37 +614,4 @@ takes [[snippet_id, snippet_text, [[vote_id, user, vote_valence],
 ...], [comment_id, user, comment], ...]
 returns ([snippets], [votes], [comments]
 """
-
-@app.route("/admin")
-def admin():
-    table = request.args.get("table")
-    query = "SELECT * FROM snippets JOIN votes ON snippets.id = votes.snippet_id ORDER BY votes.created_at"
-    conn = engine.connect()
-    try:
-        voterstats = ["name;\t\tweight;\t\tvotes;\t\tpositivity;\t\tcomments"] if table else []
-        weights = get_weights()
-        for voter, weight in sorted(weights.items(), key=lambda x:-x[1]):
-            yourvotecount = Counter(
-                item[0] for item in conn.execute(
-                    sqlalchemy.sql.text(
-                            "SELECT valence FROM votes WHERE user = :name"),
-                            name=voter)
-                    )
-            voterstats.append(
-                ((lambda *x:";\t\t".join(x)) if table else ("{} - weight {} - has voted {} times, {}% positivty, and commented {} times".format))(
-                *map(str, (
-                    voter if voter else "adam zachery",
-                    weight,
-                    sum(yourvotecount.values()),
-                    100*float(yourvotecount[1])/sum(yourvotecount.values()) if yourvotecount else "n/a",
-                    list(conn.execute(sqlalchemy.sql.text(u"select count(*) from comments where user = :name"), name=voter.encode("utf-8")))[0][0]
-                ))
-                )
-            )
-        votes = conn.execute(query)
-        comments = list(conn.execute("""SELECT snippets.text AS passage, comments.text AS comment, comments.user AS author FROM
-                    snippets JOIN comments ON snippets.id = comments.snippet_id ORDER BY comments.created_at"""))
-    finally:
-        conn.close()
-    return render_template("admin.html", voterstats=voterstats, votes=votes, comments=comments)
 
