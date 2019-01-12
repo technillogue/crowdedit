@@ -248,7 +248,7 @@ def index():
         else:
             vote_alias = alias(Vote, name="vote_alias")
             query = query.outerjoin(vote_alias).group_by(Snippet.id).order_by(
-                func.sum(vote_alias.weight)
+                func.sum(vote_alias.c.weight)
                 )
         if app.config["DEBUG"]:
             expected_snippets = (

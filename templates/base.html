@@ -1,0 +1,25 @@
+<html>
+
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/css/bootstrap.min.css" integrity="sha512-dTfge/zgoMYpP7QbHy4gWMEGsbsdZeCXz7irItjcC3sPUFtf0kuFbDz/ixG7ArTxmDjLXDmezHubeNikyKGVyQ==" crossorigin="anonymous">
+        <link rel="stylesheet" href="static/style.css">
+        <title>{% block title %}shitposts hivemind editing{% endblock %}</title>
+    </head>
+    <body style="background-color: #f1ece6">
+        <nav class="navbar navbar-inverse">
+          <div class="container">
+              <a class="navbar-brand headingtitle" href="#">{{self.title}}</a>
+              <p class="headingsubtitle">{% block subtitle%}i am not good with decisions pls to help{% endblock %}</p>
+            </div>
+          </div>
+        </nav>
+
+        <div class="container">
+            {% block content %} {% endblock%}
+        </div>
+    </body>
+</html>
+

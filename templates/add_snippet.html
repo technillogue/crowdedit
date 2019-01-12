@@ -1,31 +1,26 @@
-<html>
-    <head>
-        <meta charset="utf-8">
-        <title>add snippet(s)</title>
-    </head>
-    <body>
-        <div style="margin: 4% 10% 10% 15%">
-                    <div>
-            expects a format like
-            <div style="
-            float: block;
-            margin: 1% 0 0 5%;
-            background-color: #fbfbfb;
-            width: 20%;
-            font-family: monospace;
-            ">%[section title]%<br/>
-            first snippet<br/>
-            %split%<br/>
-            second snippet<br/>
-            %[second section title%<br/>
-            snippet...</div>
-            <br/>(wbitespace before/after %markers% optional. single unmarked snippets are also ok.)
+{% extends "base.html" %}
+{% block content %}
+<div style="margin: 4% 10% 10% 15%">
+            <div>
+    expects a format like
+    <div style="
+    float: block;
+    margin: 1% 0 0 5%;
+    background-color: #fbfbfb;
+    width: 20%;
+    font-family: monospace;
+    ">%[section title]%<br/>
+    first snippet<br/>
+    %split%<br/>
+    second snippet<br/>
+    %[second section title%<br/>
+    snippet...</div>
+    <br/>(wbitespace before/after %markers% optional. single unmarked snippets are also ok.)
 
-            <form action="add_snippet" method="POST">
-                <textarea name="text" style="width: 60%; height: 70%"></textarea>
-                <br/>
-                <input type="submit" value="add">
-            </form>
-        </div>
-    </body>
-</html>
+    <form action="add_snippet" method="POST">
+        <textarea name="text" style="width: 60%; height: 70%"></textarea>
+        <br/>
+        <input type="submit" value="add">
+    </form>
+</div>
+{% endblock content %}

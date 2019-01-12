@@ -1,39 +1,36 @@
-<html>
-    <head>
-        <meta charset="utf-8">
-    </head>
-    <body>
-        <div class="voterstats"><h1>statsss</h1>
+{% extends "base.html" %}
+{% block content %}
+<div class="voterstats"><h1>statsss</h1>
+    <ul>
+        {% for user in user_stats %}
+        <li>#{{user.id}} {{user.name}}: {{user.activity_count}} activity, {{user.positivity}}% positivty</li>
+        {% endfor %}
+    </ul>
+</div>
+<div class="snippets"><h1>snippets</h1>
+    {% for snippet in snippets %}
+    <div class="row" style="margin-left: 2%">
+        passage:
+        <p>
+            {{snippet.text}}
+        </p>
+        votes:
+        <ul>
+        {% for vote in snippet.votes %}
+            <li>{{vote.user_id}} {{vote.user_name}} voteed {{vote.valence}}</li>
+        {% endfor %}
+        </ul>
+        {% if (snippets.comments is defined) and snippets.comments %}
+            comments:
             <ul>
-                {% for user in user_stats %}
-                <li>#{{user.id}} {{user.name}}: {{user.activity_count}} activity, {{user.positivity}}% positivty</li>
-                {% endfor %}
+            {% for comment in snippet.comments %}
+                <li>{{comment.user_id}} {{comment.user_name}}: {{comment.text}}</li>
             </ul>
-        </div>
-        <div class="snippets"><h1>snippets</h1>
-            {% for snippet in snippets %}
-            <div class="row">
-                passage:
-                <p>
-                    {{snippet.text}}
-                </p>
-                votes:
-                <ul>
-                {% for vote in snippet.votes %}
-                    <li>{{vote.user_id}} {{vote.user_name}} voteed {{vote.valence}}</li>
-                {% endfor %}
-                </ul>
-                {% if (snippets.comments is defined) and snippets.comments %}
-                    comments:
-                    <ul>
-                    {% for comment in snippet.comments %}
-                        <li>{{comment.user_id}} {{comment.user_name}}: {{comment.text}}</li>
-                    </ul>
-                    {% endfor %}
-                {% endif %}
-            </div>
-            <hr>
             {% endfor %}
-        </div>
-    </body>
-</html>
+        {% endif %}
+    </div>
+    <hr>
+    {% endfor %}
+</div>
+{% endblock %}
+
