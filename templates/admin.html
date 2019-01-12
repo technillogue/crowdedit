@@ -17,7 +17,7 @@
         votes:
         <ul>
         {% for vote in snippet.votes %}
-            <li>{{vote.user_id}} {{vote.user_name}} voteed {{vote.valence}}</li>
+            <li>{{vote.user_id}} {{vote.user_name}} voted {{vote.valence}}</li>
         {% endfor %}
         </ul>
         {% if (snippets.comments is defined) and snippets.comments %}

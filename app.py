@@ -277,11 +277,11 @@ def index():
         ).scalar() / float(User.query.count())
         yep_count = Vote.query.filter(
             Vote.user_id == current_user.id,
-            Vote.valence
+            Vote.valence == True
         ).count()
         nop_count = Vote.query.filter(
             Vote.user_id == current_user.id,
-            not Vote.valence
+            Vote.valence == False
         ).count()
         if nop_count:
             positivity = int(100 * yep_count / float(yep_count + nop_count))
