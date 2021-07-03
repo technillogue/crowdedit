@@ -305,7 +305,7 @@ def hierarchize():
     finally:
         conn.close()
 
-def get_best(threshold=1, scores=False, goal_wc=10000):
+def get_best(threshold=1, scores=False, goal_wc=10000, order="shuffle"):
     conn  = engine.connect()
     try:
         snippets = list(conn.execute("SELECT id, text FROM snippets"))
@@ -334,34 +334,45 @@ def get_best(threshold=1, scores=False, goal_wc=10000):
         while wc < int(goal_wc) and len(snippets):
             rank, snippet = snippets.pop()
             wc += len(snippet.text.split())
-            dest = {3579:end, 3580:late, 2855: early, 2847: early}
+            dest = {3579:end, 3580:late, 2855: early, 2847: early, 3220: early, 2872: early}
             dest.get(snippet.id, output).append(
                 snippet.text + "\n[score: {:.3f}/{:.3f}]".format(rank[0], rank[1]) \
                 if scores else snippet.text
 
             )
-        # randomize order
-        output.sort(key=lambda x:len(x))
-        mid = len(output)//2
-        o_1 = output[:mid]
-        o_2 = output[mid:]
-        shuffle(o_1)
-        shuffle(o_2)
-        for snippet in early:
-            #all of these are long
-            o_2.insert(
-                randint(0, mid//10),
-                snippet
-            )
-        for snippet in late:
-            #all [one] of these is short
-            o_1.insert(
-                randint(-mid//10, -1),
-                snippet
-            )
-        output = list(sum(zip(o_1, o_2+[0]), ())[:-1])
-        output.insert(0, "word count: " + str(wc))
-        output.extend(end)
+        if order == "score":
+            output = early + output + late
+        elif order == "length":
+            output = early + output + late
+            output.sort(key=len)
+        else:
+            output.sort(key=len)
+            mid = len(output)//2
+            o_1 = output[:mid]
+            o_2 = output[mid:]
+            shuffle(o_1)
+            shuffle(o_2)
+            for snippet in early:
+                #all of these are long
+                o_2.insert(
+                    randint(0, mid//10),
+                    snippet
+                )
+            for snippet in late:
+                #all [one] of these is short
+                o_1.insert(
+                    randint(-mid//10, -1),
+                    snippet
+                )
+            output = list(sum(zip(o_1, o_2+[0]), ())[:-1])
+            output.extend(end)
+        blurb = ""
+        if goal_wc is not 10000:
+            blurb += "word count: " + str(wc)
+        if order != "shuffle":
+            blurb += "\norder: " + order
+        output.insert(0, blurb)
+
         return output
     finally:
         conn.close()
@@ -370,10 +381,37 @@ def get_best(threshold=1, scores=False, goal_wc=10000):
 def best():
     threshold =request.args.get("threshold", 0)
     scores=request.args.get("scores", False)
+    order=request.args.get("order", "shuffle")
     wc=request.args.get("wc", 10000)
-    output = get_best(threshold, scores, wc)
-    return "<html><body><div style=\"margin:auto;width:600px\"><p>" + "</p><p>".join(output).replace("\n", " <br/> ") + "</p></div></body><html>"
+    output = get_best(threshold, scores, wc, order=order)
+    return """
+<html>
+<head><title>shitposts</title>
+<body>
+<div style=\"margin:auto;width:600px\">
+<p><a href="/introduction">introduction</a></p>
+<p>""" + "</p><p>".join(output).replace("\n", " <br/> ") + "</p></div></body><html>"""
 
+@app.route("/introduction")
+def introduction():
+    conn = engine.connect()
+    voter_stats = Counter(name[0] for name in conn.execute("select votername from votes"))
+    editors = len(voter_stats.keys())
+    votes = sum(voter_stats.values())
+    return """<html>
+    <head><title>shitposts: introduction</title>
+    <body>
+    <div style\"margin:auto;width:600px\">
+    <p>One way of introducing this book is through facebook culture: an app, a collective literature, an oscillation between identity and fragment,  a mythology of names.</p>
+    <p>This book consists of snippets mostly written between November 1st and November 30th 2016, mostly under the influence of various substances.
+    That lengthy, difficult-to-work-with text was broken up into modular snippets, which were put into this <a href="http://enbug.pythonanywhere.com">app</a>. The idea is similar to <a href="philosophy.sexy">philosophy.sexy</a>: you vote how much you like each snippet, while statistics at the bottom tell you how much and how you’ve been voting compared to others. Based on the will of my facebook friends-of-friends, the best snippets were chosen and displayed in a partially random order.
+    In this way, I’ve had """ + str(editors) + """ co-editors collectively express """ + str(votes) + """ opinions.  <a href="http://enbug.pythonanywhere.com/best">Click here</a> to generate a new order for the book.</p>
+    <p>This gives the book certain characteristics of what Deleuze and Guattari call minor literature, namely the “collective assemblage of enunciation.” I wrote these words, but they have a collective intention, and they reflect a collective. (The other characteristics of minor literature, immediacy and the deterritorialization of language, are also relevant.) In the same way on social media a post is written individually, but its visibility is determined socially, and social memes (internet and otherwise) flow through its content. This content tends to be based not on linear structures and grand narratives of universal truths on the human condition, it tends to be fragmented, immediate, local, personal. Which doesn’t mean it’s not relatable. This book aligns itself with the latter group. </p>
+    <p>The relatability of social media, “it me!”, bellies the tension of social media and with that, queerness. They can be very identity-based: I’m a trans woman, I’m so gay, look at me and my ego and my pretty face. At the same time, there’s also the fragmentation of it: fuck identity politics, fuck gender,  fuck narrative, fuck coherence, fuck my ass. My identity on facebook, like contents of this book, oscillates between being fiercely self-absorbed and being entirely composed of the collective, the memes, the flows.  These flows and moods as well as meme magicians also lends itself to the concept of microscopic zeitgeists that crops up, to the magic and religiosity in the later days.</p>
+    <p>The oscillation between proper names and mythological references is in the same vein, the incoherence of identity, the half-mythology of alts, socks, queer names, stage names that populates weird facebook mixed evenly with complete sincerity. </p>
+    </div>
+    </body>
+    """
 
 
 @app.route("/admin")
